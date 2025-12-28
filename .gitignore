@@ -1,22 +1,19 @@
-# Environment variables
+# Local configuration
+.claude/settings.local.json
+
+# Sensitive data
+cookies.txt
 .env
 
-# Virtual environment
-venv/
-env/
-ENV/
+# Output files
+*.txt
+!requirements.txt
 
-# Python cache
+# Python
 __pycache__/
-*.py[cod]
-*$py.class
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+*.egg-info/
