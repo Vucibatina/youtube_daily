@@ -5,16 +5,21 @@ Filters out YouTube Shorts and only shows regular long-form videos.
 """
 
 import os
+import sys
 import time
 from datetime import datetime, timedelta
 from http.cookiejar import MozillaCookieJar
+from io import StringIO
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import requests
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound, IpBlocked
-from prettytable import PrettyTable
+from prettytable import PrettyTable, ALL
 from llama_cpp import Llama
 
 # Load environment variables from .env file
@@ -26,12 +31,20 @@ API_KEY = os.getenv('YOUTUBE_API_KEY')
 if not API_KEY:
     raise ValueError("YOUTUBE_API_KEY not found in environment variables. Please create a .env file with your API key.")
 
+# Email Configuration
+EMAIL_ENABLED = os.getenv('EMAIL_ENABLED', 'False').lower() == 'true'
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
+EMAIL_USERNAME = os.getenv('EMAIL_USERNAME', '')
+EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', '')
+EMAIL_TO = os.getenv('EMAIL_TO', 'vucibatina@hotmail.com')
+
 # Initialize YouTube API client
 youtube = build('youtube', 'v3', developerKey=API_KEY)
 
 # Configuration
 FETCH_TRANSCRIPTS = True  # Set to True to fetch transcripts (may hit IP limits)
-DAYS_FILTER = 10  # Only fetch transcripts for videos newer than this many days
+DAYS_FILTER = 3  # Only fetch transcripts for videos newer than this many days
 LLAMA_MODEL_PATH = "/Users/vuk/projects/david_fast_api_backup/david_fast_api/llama_models/llama-2-7b-chat-hf-q4_k_m.gguf"
 
 # Initialize Llama model (load once at startup)
@@ -41,7 +54,7 @@ print("Llama model loaded!")
 
 # List of YouTube channel IDs or handles
 # Format: @username for handles
-CHANNELS = [
+CHANNELS_BAK = [
     '@MarkMoss',
     '@LiamOttley',
     '@HeresyFinancial',
@@ -117,6 +130,20 @@ CHANNELS = [
     '@AIFoundations',
 ]
 
+# Test subset - top 10 channels
+CHANNELS = [
+    '@MarkMoss',
+    '@LiamOttley',
+    '@HeresyFinancial',
+    '@RaoulPal',
+    '@OrionTaraban',
+    '@DavidBayer',
+    '@ClearValueTax',
+    '@DavidSnyderNLP',
+    '@DejanBeric',
+    '@BenAzadi',
+]
+
 
 def get_video_transcript(video_id):
     """
@@ -141,10 +168,20 @@ def get_video_transcript(video_id):
 
         # Create API instance with authenticated session
         api = YouTubeTranscriptApi(http_client=session)
-        transcript_result = api.fetch(video_id)
+
+        # Get list of available transcripts
+        transcript_list = api.list(video_id)
+
+        # Try to get English transcript (manual or auto-generated)
+        try:
+            transcript = transcript_list.find_transcript(['en'])
+        except:
+            transcript = transcript_list.find_generated_transcript(['en'])
+
+        transcript_data = transcript.fetch()
 
         # Combine all transcript segments into one text
-        transcript_text = ' '.join([snippet.text for snippet in transcript_result.snippets])
+        transcript_text = ' '.join([entry['text'] for entry in transcript_data])
         return (transcript_text, None)
     except IpBlocked:
         return (None, 'ip_blocked')
@@ -156,24 +193,58 @@ def get_video_transcript(video_id):
         return (None, f'error: {str(e)}')
 
 
-def summarize_transcript(transcript_text, max_words=700):
+def summarize_transcript(transcript_text, max_words=None):
     """
     Summarize a video transcript using local Llama model.
 
     Args:
         transcript_text: Full transcript text
-        max_words: Maximum words for summary (default 700)
+        max_words: Maximum words for summary (if None, calculated based on transcript length: 500-3000 words)
 
     Returns:
         Summary string or error message
     """
     try:
+        # Calculate dynamic summary length based on transcript length (500-3000 words)
+        if max_words is None:
+            # Estimate: ~150 words per minute of speech, aim for 10-20% summary ratio
+            transcript_word_count = len(transcript_text.split())
+            max_words = min(3000, max(500, int(transcript_word_count * 0.15)))
+
         # Truncate transcript if too long (to fit in context window)
         max_transcript_chars = 6000
         if len(transcript_text) > max_transcript_chars:
             transcript_text = transcript_text[:max_transcript_chars] + "..."
 
-        prompt = f"""Summarize the following YouTube video transcript in maximum {max_words} words. Focus on the main points, key insights, and actionable takeaways.
+        prompt = f"""Summarize the following YouTube video transcript in {max_words} words.
+
+CRITICAL FORMATTING RULES - YOU MUST FOLLOW THESE:
+
+1. ITEMIZATION (MANDATORY): When the speaker mentions numbered points, laws, steps, rules, principles, or any list:
+   - Put each item on a NEW LINE
+   - Use clear numbering: 1), 2), 3), etc.
+   - Add indentation before each numbered item
+   - Example format:
+     The speaker discusses 5 laws:
+       1) First law description here
+       2) Second law description here
+       3) Third law description here
+
+2. PRACTICALITY (HIGH PRIORITY): Extract and highlight ALL actionable items:
+   - Specific stocks, cryptocurrencies, or assets to buy/sell
+   - Trading strategies with entry/exit points
+   - Foods, supplements, or products to consume/avoid
+   - Step-by-step instructions (format as numbered list)
+   - Tools, resources, or techniques mentioned
+   - Specific recommendations or advice
+
+3. STRUCTURE: Maintain logical flow and include key insights
+
+FORMATTING EXAMPLE:
+The video covers 3 main strategies for investing:
+  1) Dollar cost averaging into index funds monthly
+  2) Keep 20% cash for market corrections
+  3) Diversify across 5-7 sectors
 
 Transcript:
 {transcript_text}
@@ -182,7 +253,7 @@ Summary:"""
 
         response = llm(
             prompt,
-            max_tokens=1024,
+            max_tokens=2048,  # Increased to accommodate longer summaries
             temperature=0.7,
             stop=["Transcript:", "\n\n\n"],
             echo=False
@@ -193,6 +264,51 @@ Summary:"""
 
     except Exception as e:
         return f"[Error summarizing: {str(e)[:50]}]"
+
+
+def send_email_report(report_content, days_filter):
+    """
+    Send the YouTube video summary report via email.
+
+    Args:
+        report_content: The full report text to send
+        days_filter: Number of days covered in the report
+
+    Returns:
+        Boolean indicating success or failure
+    """
+    if not EMAIL_ENABLED:
+        print("Email sending is disabled. Set EMAIL_ENABLED=True in .env to enable.")
+        return False
+
+    if not EMAIL_USERNAME or not EMAIL_PASSWORD:
+        print("Email credentials not configured. Please set EMAIL_USERNAME and EMAIL_PASSWORD in .env file.")
+        return False
+
+    try:
+        # Create message
+        msg = MIMEMultipart()
+        msg['From'] = EMAIL_USERNAME
+        msg['To'] = EMAIL_TO
+        msg['Subject'] = f"Summarized youtube videos for past {days_filter} days"
+
+        # Add report content as plain text
+        msg.attach(MIMEText(report_content, 'plain'))
+
+        # Connect to SMTP server and send email
+        print(f"\nSending email report to {EMAIL_TO}...")
+        server = smtplib.SMTP(EMAIL_HOST, EMAIL_PORT)
+        server.starttls()  # Enable TLS encryption
+        server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+
+        print(f"✓ Email sent successfully to {EMAIL_TO}")
+        return True
+
+    except Exception as e:
+        print(f"✗ Failed to send email: {str(e)}")
+        return False
 
 
 def get_channel_id(channel_identifier):
@@ -352,7 +468,7 @@ def main():
                         time.sleep(1.5)  # Rate limiting
                     print()
 
-                # Create table for this channel's videos
+                # Create table for this channel's videos with line separation between rows
                 table = PrettyTable()
                 table.field_names = ["Video ID", "Date", "Title", "Summary"]
                 table.align["Video ID"] = "l"
@@ -361,6 +477,7 @@ def main():
                 table.align["Summary"] = "l"
                 table.max_width["Title"] = 40
                 table.max_width["Summary"] = 70
+                table.hrules = ALL  # Add horizontal rules between all rows for clear separation
 
                 # Add rows to table
                 for video in sorted_videos:
@@ -381,4 +498,25 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    # Capture output to send via email
+    output_capture = StringIO()
+
+    # Redirect stdout to capture all print statements
+    original_stdout = sys.stdout
+    sys.stdout = output_capture
+
+    try:
+        # Run the main function
+        main()
+    finally:
+        # Restore original stdout
+        sys.stdout = original_stdout
+
+    # Get the captured output
+    report_content = output_capture.getvalue()
+
+    # Print to console
+    print(report_content)
+
+    # Send email report
+    send_email_report(report_content, DAYS_FILTER)
