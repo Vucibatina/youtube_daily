@@ -13,6 +13,8 @@ from io import StringIO
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 import requests
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -37,7 +39,7 @@ EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
 EMAIL_USERNAME = os.getenv('EMAIL_USERNAME', '')
 EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', '')
-EMAIL_TO = os.getenv('EMAIL_TO', 'vucibatina@hotmail.com')
+EMAIL_TO = os.getenv('EMAIL_TO', 'vucibatina@hotmail.com,vucibatina@gmail.com')
 
 # Initialize YouTube API client
 youtube = build('youtube', 'v3', developerKey=API_KEY)
@@ -147,7 +149,7 @@ CHANNELS = [
 
 def get_video_transcript(video_id):
     """
-    Fetch the transcript for a YouTube video using cookies for authentication.
+    Fetch the transcript for a YouTube video.
 
     Args:
         video_id: YouTube video ID
@@ -157,39 +159,35 @@ def get_video_transcript(video_id):
         or a string describing the error ('ip_blocked', 'no_transcript', 'disabled', 'error')
     """
     try:
-        # Use cookies file for authentication to avoid IP blocks
-        cookies_path = os.path.join(os.path.dirname(__file__), 'cookies.txt')
-
-        # Create a session with cookies
-        session = requests.Session()
-        cookies = MozillaCookieJar(cookies_path)
-        cookies.load(ignore_discard=True, ignore_expires=True)
-        session.cookies.update(cookies)
-
-        # Create API instance with authenticated session
-        api = YouTubeTranscriptApi(http_client=session)
+        # Create API instance
+        api = YouTubeTranscriptApi()
 
         # Get list of available transcripts
         transcript_list = api.list(video_id)
 
         # Try to get English transcript (manual or auto-generated)
         try:
+            # Try to find manually created English transcript first
             transcript = transcript_list.find_transcript(['en'])
         except:
+            # If not available, try auto-generated English transcript
             transcript = transcript_list.find_generated_transcript(['en'])
 
+        # Fetch the transcript data
         transcript_data = transcript.fetch()
 
         # Combine all transcript segments into one text
         transcript_text = ' '.join([entry['text'] for entry in transcript_data])
         return (transcript_text, None)
-    except IpBlocked:
-        return (None, 'ip_blocked')
-    except NoTranscriptFound:
-        return (None, 'no_transcript')
     except TranscriptsDisabled:
         return (None, 'disabled')
+    except NoTranscriptFound:
+        return (None, 'no_transcript')
     except Exception as e:
+        # Check if it's an IP block or other error
+        error_msg = str(e).lower()
+        if 'too many requests' in error_msg or '429' in error_msg:
+            return (None, 'ip_blocked')
         return (None, f'error: {str(e)}')
 
 
@@ -266,12 +264,12 @@ Summary:"""
         return f"[Error summarizing: {str(e)[:50]}]"
 
 
-def send_email_report(report_content, days_filter):
+def send_email_report(report_file_path, days_filter):
     """
-    Send the YouTube video summary report via email.
+    Send the YouTube video summary report via email with file attachment.
 
     Args:
-        report_content: The full report text to send
+        report_file_path: Path to the report file to attach
         days_filter: Number of days covered in the report
 
     Returns:
@@ -285,25 +283,40 @@ def send_email_report(report_content, days_filter):
         print("Email credentials not configured. Please set EMAIL_USERNAME and EMAIL_PASSWORD in .env file.")
         return False
 
+    # Parse email recipients (comma-separated)
+    email_recipients = [email.strip() for email in EMAIL_TO.split(',')]
+
     try:
         # Create message
         msg = MIMEMultipart()
         msg['From'] = EMAIL_USERNAME
-        msg['To'] = EMAIL_TO
-        msg['Subject'] = f"Summarized youtube videos for past {days_filter} days"
+        msg['To'] = ', '.join(email_recipients)
+        msg['Subject'] = f"YouTube Video Report - Past {days_filter} Days"
 
-        # Add report content as plain text
-        msg.attach(MIMEText(report_content, 'plain'))
+        # Add email body
+        body = f"Please find attached the YouTube video summary report for the past {days_filter} days.\n\nReport file: {os.path.basename(report_file_path)}"
+        msg.attach(MIMEText(body, 'plain'))
+
+        # Attach the report file
+        with open(report_file_path, 'rb') as attachment:
+            part = MIMEBase('application', 'octet-stream')
+            part.set_payload(attachment.read())
+            encoders.encode_base64(part)
+            part.add_header(
+                'Content-Disposition',
+                f'attachment; filename= {os.path.basename(report_file_path)}'
+            )
+            msg.attach(part)
 
         # Connect to SMTP server and send email
-        print(f"\nSending email report to {EMAIL_TO}...")
+        print(f"\nSending email report to {len(email_recipients)} recipient(s): {', '.join(email_recipients)}...")
         server = smtplib.SMTP(EMAIL_HOST, EMAIL_PORT)
         server.starttls()  # Enable TLS encryption
         server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
         server.send_message(msg)
         server.quit()
 
-        print(f"✓ Email sent successfully to {EMAIL_TO}")
+        print(f"✓ Email sent successfully to: {', '.join(email_recipients)}")
         return True
 
     except Exception as e:
@@ -342,14 +355,14 @@ def get_channel_id(channel_identifier):
         return channel_identifier
 
 
-def get_channel_videos(channel_id, max_results=50, days_filter=10):
+def get_channel_videos(channel_id, max_results=50, days_filter=3):
     """
     Fetch videos from a YouTube channel, filtering out Shorts and old videos.
 
     Args:
         channel_id: YouTube channel ID
         max_results: Maximum number of videos to fetch (default 50)
-        days_filter: Only include videos from the past N days (default 10)
+        days_filter: Only include videos from the past N days (default 3)
 
     Returns:
         Tuple of (channel_title, list of recent video dictionaries)
@@ -429,7 +442,7 @@ def get_channel_videos(channel_id, max_results=50, days_filter=10):
 
 
 def main():
-    """Main function to process all channels and display videos from past 10 days."""
+    """Main function to process all channels and display videos from past 3 days."""
 
     print(f"Fetching videos from the past {DAYS_FILTER} days...\n")
 
@@ -465,24 +478,26 @@ def main():
                             video['summary'] = summarize_transcript(transcript)
                         else:
                             video['summary'] = f"[No transcript: {error}]"
-                        time.sleep(1.5)  # Rate limiting
+                        time.sleep(4)  # Rate limiting - increased delay to avoid IP blocking
                     print()
 
                 # Create table for this channel's videos with line separation between rows
                 table = PrettyTable()
-                table.field_names = ["Video ID", "Date", "Title", "Summary"]
-                table.align["Video ID"] = "l"
+                table.field_names = ["YouTube Link", "Date", "Title", "Summary"]
+                table.align["YouTube Link"] = "l"
                 table.align["Date"] = "c"
                 table.align["Title"] = "l"
                 table.align["Summary"] = "l"
+                table.max_width["YouTube Link"] = 45
                 table.max_width["Title"] = 40
                 table.max_width["Summary"] = 70
                 table.hrules = ALL  # Add horizontal rules between all rows for clear separation
 
                 # Add rows to table
                 for video in sorted_videos:
+                    youtube_url = f"https://www.youtube.com/watch?v={video['video_id']}"
                     table.add_row([
-                        video['video_id'],
+                        youtube_url,
                         video['published_at'],
                         video['title'],
                         video.get('summary', '[Transcripts disabled]')
@@ -518,5 +533,15 @@ if __name__ == '__main__':
     # Print to console
     print(report_content)
 
-    # Send email report
-    send_email_report(report_content, DAYS_FILTER)
+    # Generate filename with date format: YOUTUBE_VUK_[MMDDYYYY].txt
+    today = datetime.now()
+    filename = f"YOUTUBE_VUK_{today.strftime('%m%d%Y')}.txt"
+
+    # Save report to file
+    print(f"\nSaving report to {filename}...")
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(report_content)
+    print(f"✓ Report saved successfully to {filename}")
+
+    # Send email report with file attachment
+    send_email_report(filename, DAYS_FILTER)

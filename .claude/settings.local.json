@@ -2,7 +2,14 @@
   "permissions": {
     "allow": [
       "Bash(git config:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(ls:*)",
+      "Bash(python fetch_youtube_videos.py:*)",
+      "Bash(pip install:*)",
+      "Bash(python3:*)",
+      "Bash(source:*)",
+      "Bash(wait)",
+      "Bash(python:*)"
     ],
     "deny": [],
     "ask": []
