@@ -49,10 +49,14 @@ FETCH_TRANSCRIPTS = True  # Set to True to fetch transcripts (may hit IP limits)
 DAYS_FILTER = 3  # Only fetch transcripts for videos newer than this many days
 LLAMA_MODEL_PATH = "/Users/vuk/projects/david_fast_api_backup/david_fast_api/llama_models/llama-2-7b-chat-hf-q4_k_m.gguf"
 
-# Initialize Llama model (load once at startup)
-print("Loading Llama model...")
-llm = Llama(model_path=LLAMA_MODEL_PATH, n_ctx=2048, n_threads=4)
-print("Llama model loaded!")
+# Initialize Llama model (load once at startup) - only if transcripts are enabled
+if FETCH_TRANSCRIPTS:
+    print("Loading Llama model...")
+    llm = Llama(model_path=LLAMA_MODEL_PATH, n_ctx=2048, n_threads=4)
+    print("Llama model loaded!")
+else:
+    llm = None
+    print("Transcript fetching disabled - Llama model not loaded")
 
 # List of YouTube channel IDs or handles
 # Format: @username for handles
@@ -159,25 +163,22 @@ def get_video_transcript(video_id):
         or a string describing the error ('ip_blocked', 'no_transcript', 'disabled', 'error')
     """
     try:
-        # Create API instance
+        # Create API instance and get list of available transcripts
         api = YouTubeTranscriptApi()
-
-        # Get list of available transcripts
         transcript_list = api.list(video_id)
 
-        # Try to get English transcript (manual or auto-generated)
+        # Try to find English transcript (manual or auto-generated)
         try:
-            # Try to find manually created English transcript first
             transcript = transcript_list.find_transcript(['en'])
         except:
-            # If not available, try auto-generated English transcript
+            # If English not found, try to find any manually created transcript
             transcript = transcript_list.find_generated_transcript(['en'])
 
-        # Fetch the transcript data
+        # Fetch the actual transcript data
         transcript_data = transcript.fetch()
 
         # Combine all transcript segments into one text
-        transcript_text = ' '.join([entry['text'] for entry in transcript_data])
+        transcript_text = ' '.join([entry.text for entry in transcript_data])
         return (transcript_text, None)
     except TranscriptsDisabled:
         return (None, 'disabled')
