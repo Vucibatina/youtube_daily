@@ -46,7 +46,7 @@ youtube = build('youtube', 'v3', developerKey=API_KEY)
 
 # Configuration
 FETCH_TRANSCRIPTS = True  # Set to True to fetch transcripts (may hit IP limits)
-DAYS_FILTER = 3  # Only fetch transcripts for videos newer than this many days
+DAYS_FILTER = 1  # Only fetch transcripts for videos newer than this many days
 LLAMA_MODEL_PATH = "/Users/vuk/projects/david_fast_api_backup/david_fast_api/llama_models/llama-2-7b-chat-hf-q4_k_m.gguf"
 
 # Initialize Llama model (load once at startup) - only if transcripts are enabled
@@ -89,13 +89,10 @@ CHANNELS_BAK = [
     '@DrEricBergDC',
     '@JOSEMORALEJO',
     '@SpotlightTV',
-    '@CaneDojcilovic',
     '@PowerfulJRE',
-    '@FatherMoses',
     '@JulianGoldieSEO',
     '@BlicTV',
     '@OliviaAlexa',
-    '@StarSports',
     '@HelmCast',
     '@Pivokosa',
     '@WeebUnion',
@@ -103,23 +100,15 @@ CHANNELS_BAK = [
     '@CaseyZander',
     '@AIEngineer',
     '@DrTraceyMarks',
-    '@IvanKosogorPodcast',
-    '@CrvenaZvezda',
-    '@SlavicaSquire',
     '@HusseinNasser',
     '@motivationaldoc',
     '@RenaMalikMD',
-    '@MichaelFranzese',
-    '@Familijobe',
     '@ReverseAgingRevolution',
-    '@Teachingmensfashion',
     '@TheAIAdvantage',
     '@PeakProsperity',
     '@AIAnytime',
     '@AaronDoughty',
     '@TAGMEDIATV',
-    '@SandraSiladjev',
-    '@VasicMedia',
     '@HasanAboulHasan',
     '@TheDiaryOfACEO',
     '@DrJamesDiNicolantonio',
@@ -129,15 +118,40 @@ CHANNELS_BAK = [
     '@RuhiCenetDocumentaries',
     '@TinyTechnicalTutorials',
     '@SystemDesignFightClub',
-    '@EmirKusturica',
-    '@MilosPistolic',
-    '@ShawTalebi',
     '@RobMulla',
     '@AIFoundations',
 ]
 
-# Test subset - top 10 channels
+# Health & Wellness + Personal Development & Business + Finance channels
 CHANNELS = [
+    # Health & Wellness (7 channels)
+    '@BenAzadi',
+    '@DrEricBergDC',
+    '@DrTraceyMarks',
+    '@motivationaldoc',
+    '@RenaMalikMD',
+    '@ReverseAgingRevolution',
+    '@DrJamesDiNicolantonio',
+
+    # Personal Development & Business (6 channels)
+    '@TomBilyeu',
+    '@EntrepreneursinCars',
+    '@CaseyZander',
+    '@TheDiaryOfACEO',
+    '@JulianGoldieSEO',
+    '@OliviaAlexa',
+
+    # Finance & Economics (3 channels)
+    '@MarkMoss',
+    '@HeresyFinancial',
+    '@RaoulPal',
+
+    # NLP & Psychology (1 channel)
+    '@DavidSnyderNLP',
+]
+
+# Full channel list (EFL and TheDotPot removed) - Uncomment when ready
+CHANNELS_FULL = [
     '@MarkMoss',
     '@LiamOttley',
     '@HeresyFinancial',
@@ -148,6 +162,53 @@ CHANNELS = [
     '@DavidSnyderNLP',
     '@DejanBeric',
     '@BenAzadi',
+    '@Kaggle',
+    '@TomBilyeu',
+    '@JessicaOs',
+    '@ViktorJeremic',
+    '@TealSwan',
+    '@MilitarySummary',
+    '@SimplyBitcoin',
+    '@XOFruit',
+    '@TuckerCarlson',
+    '@KatieClarke',
+    '@Fireship',
+    '@THEGRIM',
+    '@EntrepreneursinCars',
+    '@DrEricBergDC',
+    '@JOSEMORALEJO',
+    '@SpotlightTV',
+    '@PowerfulJRE',
+    '@JulianGoldieSEO',
+    '@BlicTV',
+    '@OliviaAlexa',
+    '@HelmCast',
+    '@Pivokosa',
+    '@WeebUnion',
+    '@UFDTech',
+    '@CaseyZander',
+    '@AIEngineer',
+    '@DrTraceyMarks',
+    '@HusseinNasser',
+    '@motivationaldoc',
+    '@RenaMalikMD',
+    '@ReverseAgingRevolution',
+    '@TheAIAdvantage',
+    '@PeakProsperity',
+    '@AIAnytime',
+    '@AaronDoughty',
+    '@TAGMEDIATV',
+    '@HasanAboulHasan',
+    '@TheDiaryOfACEO',
+    '@DrJamesDiNicolantonio',
+    '@ArthurMello',
+    '@ScottRitter',
+    '@TripodProduction',
+    '@RuhiCenetDocumentaries',
+    '@TinyTechnicalTutorials',
+    '@SystemDesignFightClub',
+    '@RobMulla',
+    '@AIFoundations',
 ]
 
 
@@ -186,10 +247,11 @@ def get_video_transcript(video_id):
         return (None, 'no_transcript')
     except Exception as e:
         # Check if it's an IP block or other error
-        error_msg = str(e).lower()
-        if 'too many requests' in error_msg or '429' in error_msg:
+        error_msg = str(e)
+        error_msg_lower = error_msg.lower()
+        if 'too many requests' in error_msg_lower or '429' in error_msg_lower:
             return (None, 'ip_blocked')
-        return (None, f'error: {str(e)}')
+        return (None, f'error: {error_msg[:50]}')
 
 
 def summarize_transcript(transcript_text, max_words=None):
@@ -265,13 +327,14 @@ Summary:"""
         return f"[Error summarizing: {str(e)[:50]}]"
 
 
-def send_email_report(report_file_path, days_filter):
+def send_email_report(report_file_path, days_filter, all_videos_data):
     """
     Send the YouTube video summary report via email with file attachment.
 
     Args:
         report_file_path: Path to the report file to attach
         days_filter: Number of days covered in the report
+        all_videos_data: List of tuples (channel_title, video_dict) for all videos
 
     Returns:
         Boolean indicating success or failure
@@ -289,14 +352,37 @@ def send_email_report(report_file_path, days_filter):
 
     try:
         # Create message
-        msg = MIMEMultipart()
+        msg = MIMEMultipart('alternative')
         msg['From'] = EMAIL_USERNAME
         msg['To'] = ', '.join(email_recipients)
         msg['Subject'] = f"YouTube Video Report - Past {days_filter} Days"
 
-        # Add email body
-        body = f"Please find attached the YouTube video summary report for the past {days_filter} days.\n\nReport file: {os.path.basename(report_file_path)}"
-        msg.attach(MIMEText(body, 'plain'))
+        # Build HTML email body with video information
+        html_body = f"""<html>
+<head></head>
+<body>
+<p>YouTube Video Summary Report for the past {days_filter} days:</p>
+<br>
+"""
+
+        for channel_title, video in all_videos_data:
+            youtube_url = f"https://www.youtube.com/watch?v={video['video_id']}"
+            video_title = video['title']
+            summary = video.get('summary', '[Transcripts disabled]')
+
+            html_body += f"""<p><strong>{channel_title}</strong><br>
+<a href="{youtube_url}">{video_title}</a><br>
+{summary}</p>
+
+"""
+
+        html_body += f"""<br>
+<p><em>Full report attached: {os.path.basename(report_file_path)}</em></p>
+</body>
+</html>"""
+
+        # Attach HTML body
+        msg.attach(MIMEText(html_body, 'html'))
 
         # Attach the report file
         with open(report_file_path, 'rb') as attachment:
@@ -405,6 +491,10 @@ def get_channel_videos(channel_id, max_results=50, days_filter=3):
             ).execute()
 
             for video in videos_response['items']:
+                # Skip videos without duration (deleted, private, or live streams)
+                if 'duration' not in video.get('contentDetails', {}):
+                    continue
+
                 # Parse duration to filter out Shorts (typically under 60 seconds)
                 duration = video['contentDetails']['duration']
 
@@ -443,12 +533,17 @@ def get_channel_videos(channel_id, max_results=50, days_filter=3):
 
 
 def main():
-    """Main function to process all channels and display videos from past 3 days."""
+    """Main function to process all channels and display videos from past 3 days.
+
+    Returns:
+        List of tuples (channel_title, video_dict) for all videos found
+    """
 
     print(f"Fetching videos from the past {DAYS_FILTER} days...\n")
 
     channels_with_videos = 0
     total_videos = 0
+    all_videos_data = []  # Collect all videos with channel info for email
 
     for channel_identifier in CHANNELS:
         channel_id = get_channel_id(channel_identifier)
@@ -482,6 +577,10 @@ def main():
                         time.sleep(4)  # Rate limiting - increased delay to avoid IP blocking
                     print()
 
+                # Collect videos for email body
+                for video in sorted_videos:
+                    all_videos_data.append((channel_title, video))
+
                 # Create table for this channel's videos with line separation between rows
                 table = PrettyTable()
                 table.field_names = ["YouTube Link", "Date", "Title", "Summary"]
@@ -512,6 +611,8 @@ def main():
     print(f"Summary: Found {total_videos} videos from {channels_with_videos} channels in the past {DAYS_FILTER} days")
     print("=" * 80)
 
+    return all_videos_data
+
 
 if __name__ == '__main__':
     # Capture output to send via email
@@ -522,8 +623,8 @@ if __name__ == '__main__':
     sys.stdout = output_capture
 
     try:
-        # Run the main function
-        main()
+        # Run the main function and get video data
+        all_videos_data = main()
     finally:
         # Restore original stdout
         sys.stdout = original_stdout
@@ -544,5 +645,5 @@ if __name__ == '__main__':
         f.write(report_content)
     print(f"✓ Report saved successfully to {filename}")
 
-    # Send email report with file attachment
-    send_email_report(filename, DAYS_FILTER)
+    # Send email report with file attachment and formatted body
+    send_email_report(filename, DAYS_FILTER, all_videos_data)
