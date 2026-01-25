@@ -47,12 +47,13 @@ youtube = build('youtube', 'v3', developerKey=API_KEY)
 # Configuration
 FETCH_TRANSCRIPTS = True  # Set to True to fetch transcripts (may hit IP limits)
 DAYS_FILTER = 1  # Only fetch transcripts for videos newer than this many days
+MAX_VIDEOS_PER_CHANNEL = 3  # Maximum number of videos to process per channel
 LLAMA_MODEL_PATH = "/Users/vuk/projects/david_fast_api_backup/david_fast_api/llama_models/llama-2-7b-chat-hf-q4_k_m.gguf"
 
 # Initialize Llama model (load once at startup) - only if transcripts are enabled
 if FETCH_TRANSCRIPTS:
     print("Loading Llama model...")
-    llm = Llama(model_path=LLAMA_MODEL_PATH, n_ctx=2048, n_threads=4)
+    llm = Llama(model_path=LLAMA_MODEL_PATH, n_ctx=8192, n_threads=4)  # Increased context window for longer summaries
     print("Llama model loaded!")
 else:
     llm = None
@@ -260,52 +261,56 @@ def summarize_transcript(transcript_text, max_words=None):
 
     Args:
         transcript_text: Full transcript text
-        max_words: Maximum words for summary (if None, calculated based on transcript length: 500-3000 words)
+        max_words: Maximum words for summary (if None, calculated as ~20% of transcript length)
 
     Returns:
         Summary string or error message
     """
     try:
-        # Calculate dynamic summary length based on transcript length (500-3000 words)
+        # Calculate dynamic summary length based on transcript length (~20% = 1/5th)
         if max_words is None:
-            # Estimate: ~150 words per minute of speech, aim for 10-20% summary ratio
             transcript_word_count = len(transcript_text.split())
-            max_words = min(3000, max(500, int(transcript_word_count * 0.15)))
+            # Aim for 20% (1/5th) of original length, minimum 500, maximum 5000 words
+            max_words = min(5000, max(500, int(transcript_word_count * 0.2)))
 
         # Truncate transcript if too long (to fit in context window)
-        max_transcript_chars = 6000
+        max_transcript_chars = 8000
         if len(transcript_text) > max_transcript_chars:
             transcript_text = transcript_text[:max_transcript_chars] + "..."
 
-        prompt = f"""Summarize the following YouTube video transcript in {max_words} words.
+        prompt = f"""Summarize the following YouTube video transcript in approximately {max_words} words.
 
-CRITICAL FORMATTING RULES - YOU MUST FOLLOW THESE:
+CRITICAL FORMATTING RULES - YOU MUST FOLLOW THESE EXACTLY:
 
-1. ITEMIZATION (MANDATORY): When the speaker mentions numbered points, laws, steps, rules, principles, or any list:
-   - Put each item on a NEW LINE
+1. ITEMIZATION (ABSOLUTELY MANDATORY): When the speaker mentions ANY numbered points, laws, steps, rules, principles, tips, strategies, or lists:
+   - YOU MUST INCLUDE THE COMPLETE LIST - DO NOT CUT IT SHORT
+   - Put EACH item on a NEW LINE (use \\n)
    - Use clear numbering: 1), 2), 3), etc.
-   - Add indentation before each numbered item
-   - Example format:
-     The speaker discusses 5 laws:
-       1) First law description here
-       2) Second law description here
-       3) Third law description here
+   - If there are 7 items, include ALL 7 items
+   - If there are 10 items, include ALL 10 items
+   - NEVER truncate lists - always show the complete list
+   - Format example:
+     The speaker discusses 7 foods:
+       1) First food and its benefits
+       2) Second food and its benefits
+       3) Third food and its benefits
+       4) Fourth food and its benefits
+       5) Fifth food and its benefits
+       6) Sixth food and its benefits
+       7) Seventh food and its benefits
 
 2. PRACTICALITY (HIGH PRIORITY): Extract and highlight ALL actionable items:
    - Specific stocks, cryptocurrencies, or assets to buy/sell
    - Trading strategies with entry/exit points
    - Foods, supplements, or products to consume/avoid
-   - Step-by-step instructions (format as numbered list)
+   - Step-by-step instructions (format as numbered list with newlines)
    - Tools, resources, or techniques mentioned
    - Specific recommendations or advice
+   - Complete dosages, amounts, or measurements
 
-3. STRUCTURE: Maintain logical flow and include key insights
+3. COMPLETENESS: Do NOT cut off mid-sentence. Complete all thoughts and lists fully.
 
-FORMATTING EXAMPLE:
-The video covers 3 main strategies for investing:
-  1) Dollar cost averaging into index funds monthly
-  2) Keep 20% cash for market corrections
-  3) Diversify across 5-7 sectors
+4. STRUCTURE: Maintain logical flow and include all key insights
 
 Transcript:
 {transcript_text}
@@ -314,9 +319,9 @@ Summary:"""
 
         response = llm(
             prompt,
-            max_tokens=2048,  # Increased to accommodate longer summaries
+            max_tokens=4096,  # Increased to accommodate longer, complete summaries
             temperature=0.7,
-            stop=["Transcript:", "\n\n\n"],
+            stop=["Transcript:", "\n\n\n\n"],
             echo=False
         )
 
@@ -369,10 +374,12 @@ def send_email_report(report_file_path, days_filter, all_videos_data):
             youtube_url = f"https://www.youtube.com/watch?v={video['video_id']}"
             video_title = video['title']
             summary = video.get('summary', '[Transcripts disabled]')
+            # Convert newlines to <br> tags for HTML formatting
+            summary_html = summary.replace('\n', '<br>\n')
 
             html_body += f"""<p><strong>{channel_title}</strong><br>
 <a href="{youtube_url}">{video_title}</a><br>
-{summary}</p>
+{summary_html}</p>
 
 """
 
@@ -554,15 +561,21 @@ def main():
             # Only display channels that have videos in the past N days
             if videos and channel_title:
                 channels_with_videos += 1
-                total_videos += len(videos)
+
+                # Sort videos by date (most recent first)
+                sorted_videos = sorted(videos, key=lambda x: x['date_obj'], reverse=True)
+
+                # Limit to maximum number of videos per channel
+                if len(sorted_videos) > MAX_VIDEOS_PER_CHANNEL:
+                    print(f"Note: {channel_title} has {len(sorted_videos)} videos, limiting to {MAX_VIDEOS_PER_CHANNEL} most recent")
+                    sorted_videos = sorted_videos[:MAX_VIDEOS_PER_CHANNEL]
+
+                total_videos += len(sorted_videos)
 
                 # Print channel name as header
                 print("=" * 120)
                 print(f"  {channel_title}")
                 print("=" * 120)
-
-                # Sort videos by date (most recent first)
-                sorted_videos = sorted(videos, key=lambda x: x['date_obj'], reverse=True)
 
                 # Fetch transcripts and summaries for each video
                 if FETCH_TRANSCRIPTS:
@@ -590,7 +603,7 @@ def main():
                 table.align["Summary"] = "l"
                 table.max_width["YouTube Link"] = 45
                 table.max_width["Title"] = 40
-                table.max_width["Summary"] = 70
+                table.max_width["Summary"] = 200  # Increased from 70 to allow full summaries with complete lists
                 table.hrules = ALL  # Add horizontal rules between all rows for clear separation
 
                 # Add rows to table
