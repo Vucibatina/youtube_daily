@@ -46,7 +46,7 @@ youtube = build('youtube', 'v3', developerKey=API_KEY)
 
 # Configuration
 FETCH_TRANSCRIPTS = True  # Set to True to fetch transcripts (may hit IP limits)
-DAYS_FILTER = 1  # Only fetch transcripts for videos newer than this many days
+DAYS_FILTER = 3  # Only fetch transcripts for videos newer than this many days
 MAX_VIDEOS_PER_CHANNEL = 3  # Maximum number of videos to process per channel
 LLAMA_MODEL_PATH = "/Users/vuk/projects/david_fast_api_backup/david_fast_api/llama_models/llama-2-7b-chat-hf-q4_k_m.gguf"
 
@@ -87,7 +87,7 @@ CHANNELS_BAK = [
     '@Fireship',
     '@THEGRIM',
     '@EntrepreneursinCars',
-    '@DrEricBergDC',
+    '@Drberg',
     '@JOSEMORALEJO',
     '@SpotlightTV',
     '@PowerfulJRE',
@@ -112,7 +112,7 @@ CHANNELS_BAK = [
     '@TAGMEDIATV',
     '@HasanAboulHasan',
     '@TheDiaryOfACEO',
-    '@DrJamesDiNicolantonio',
+    '@dr.jamesdinicolantonio2215',
     '@ArthurMello',
     '@ScottRitter',
     '@TripodProduction',
@@ -127,28 +127,33 @@ CHANNELS_BAK = [
 CHANNELS = [
     # Health & Wellness (7 channels)
     '@BenAzadi',
-    '@DrEricBergDC',
+    '@Drberg',
     '@DrTraceyMarks',
     '@motivationaldoc',
     '@RenaMalikMD',
     '@ReverseAgingRevolution',
-    '@DrJamesDiNicolantonio',
+    '@dr.jamesdinicolantonio2215',
 
     # Personal Development & Business (6 channels)
     '@TomBilyeu',
-    '@EntrepreneursinCars',
-    '@CaseyZander',
     '@TheDiaryOfACEO',
-    '@JulianGoldieSEO',
-    '@OliviaAlexa',
 
     # Finance & Economics (3 channels)
-    '@MarkMoss',
+    '@1MarkMoss',
     '@HeresyFinancial',
-    '@RaoulPal',
+    '@RaoulPalTJM',
 
     # NLP & Psychology (1 channel)
     '@DavidSnyderNLP',
+
+    '@DavidOndrej',
+    '@wimhof1',
+    '@BryanJohnson',
+    '@DrGundry',
+    '@DoctorMike',
+    '@BobbyParrish',
+    '@GlucoseRevolution',
+    '@diabe_tech',
 ]
 
 # Full channel list (EFL and TheDotPot removed) - Uncomment when ready
@@ -176,7 +181,7 @@ CHANNELS_FULL = [
     '@Fireship',
     '@THEGRIM',
     '@EntrepreneursinCars',
-    '@DrEricBergDC',
+    '@Drberg',
     '@JOSEMORALEJO',
     '@SpotlightTV',
     '@PowerfulJRE',
@@ -201,7 +206,7 @@ CHANNELS_FULL = [
     '@TAGMEDIATV',
     '@HasanAboulHasan',
     '@TheDiaryOfACEO',
-    '@DrJamesDiNicolantonio',
+    '@dr.jamesdinicolantonio2215',
     '@ArthurMello',
     '@ScottRitter',
     '@TripodProduction',
@@ -255,6 +260,18 @@ def get_video_transcript(video_id):
         return (None, f'error: {error_msg[:50]}')
 
 
+def save_transcript(video_id, channel_title, published_at, title, transcript_text):
+    """Save transcript to data/<video_id>.txt with metadata header."""
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+    os.makedirs(data_dir, exist_ok=True)
+    file_path = os.path.join(data_dir, f"{video_id}.txt")
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(f"{channel_title}\n")
+        f.write(f"{published_at}\n")
+        f.write(f"{title}\n")
+        f.write(f"{transcript_text}\n")
+
+
 def summarize_transcript(transcript_text, max_words=None):
     """
     Summarize a video transcript using local Llama model.
@@ -278,39 +295,34 @@ def summarize_transcript(transcript_text, max_words=None):
         if len(transcript_text) > max_transcript_chars:
             transcript_text = transcript_text[:max_transcript_chars] + "..."
 
-        prompt = f"""Summarize the following YouTube video transcript in approximately {max_words} words.
+        prompt = f"""Summarize the following YouTube video transcript using bullet points. The transcript is approximately {max_words * 5} characters — scale the number and depth of bullet points to match: longer transcripts require more bullets and more detail per bullet.
 
 CRITICAL FORMATTING RULES - YOU MUST FOLLOW THESE EXACTLY:
 
-1. ITEMIZATION (ABSOLUTELY MANDATORY): When the speaker mentions ANY numbered points, laws, steps, rules, principles, tips, strategies, or lists:
-   - YOU MUST INCLUDE THE COMPLETE LIST - DO NOT CUT IT SHORT
-   - Put EACH item on a NEW LINE (use \\n)
-   - Use clear numbering: 1), 2), 3), etc.
-   - If there are 7 items, include ALL 7 items
-   - If there are 10 items, include ALL 10 items
-   - NEVER truncate lists - always show the complete list
-   - Format example:
-     The speaker discusses 7 foods:
-       1) First food and its benefits
-       2) Second food and its benefits
-       3) Third food and its benefits
-       4) Fourth food and its benefits
-       5) Fifth food and its benefits
-       6) Sixth food and its benefits
-       7) Seventh food and its benefits
+1. OPENING: DO NOT start with "The speaker discusses", "The video discusses", "In this video", or any similar filler phrase. Jump straight into the content and topic itself.
 
-2. PRACTICALITY (HIGH PRIORITY): Extract and highlight ALL actionable items:
+2. BULLET POINTS (MANDATORY FORMAT):
+   - Write the entire summary as bullet points using "•"
+   - Each bullet point should be a self-contained insight, fact, or recommendation
+   - Longer transcripts = more bullet points and more detailed bullets
+   - Sub-bullets (  ◦) for nested details, examples, or elaborations
+
+3. ITEMIZATION (ABSOLUTELY MANDATORY): When the speaker mentions ANY numbered points, laws, steps, rules, principles, tips, strategies, or lists:
+   - YOU MUST INCLUDE THE COMPLETE LIST - DO NOT CUT IT SHORT
+   - Put EACH item on a NEW LINE
+   - Use clear numbering: 1), 2), 3), etc.
+   - NEVER truncate lists - always show the complete list
+
+4. PRACTICALITY (HIGH PRIORITY): Extract and highlight ALL actionable items:
    - Specific stocks, cryptocurrencies, or assets to buy/sell
    - Trading strategies with entry/exit points
    - Foods, supplements, or products to consume/avoid
-   - Step-by-step instructions (format as numbered list with newlines)
+   - Step-by-step instructions (format as numbered list)
    - Tools, resources, or techniques mentioned
    - Specific recommendations or advice
    - Complete dosages, amounts, or measurements
 
-3. COMPLETENESS: Do NOT cut off mid-sentence. Complete all thoughts and lists fully.
-
-4. STRUCTURE: Maintain logical flow and include all key insights
+5. COMPLETENESS: Do NOT cut off mid-sentence. Complete all thoughts and lists fully.
 
 Transcript:
 {transcript_text}
@@ -583,6 +595,7 @@ def main():
                     for video in sorted_videos:
                         transcript, error = get_video_transcript(video['video_id'])
                         if transcript:
+                            save_transcript(video['video_id'], channel_title, video['published_at'], video['title'], transcript)
                             print(f"  Summarizing: {video['title'][:60]}...")
                             video['summary'] = summarize_transcript(transcript)
                         else:

@@ -9,6 +9,14 @@ cookies.txt
 *.txt
 !requirements.txt
 
+# Data directory (transcripts)
+data/
+
+# Runtime / log files
+.last_run
+*.log
+.DS_Store
+
 # Python
 __pycache__/
 *.pyc
